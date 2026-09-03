@@ -12,6 +12,7 @@ import argparse
 import csv
 import json
 import sys
+from dataclasses import asdict
 from typing import List, Optional
 
 from apc_analyzer import (
@@ -169,17 +170,20 @@ def build_parser() -> argparse.ArgumentParser:
     jp_p.add_argument("--years", nargs="+", type=int, required=True, help="Year sequence")
     jp_p.add_argument("--rates", nargs="+", type=float, required=True, help="Rate sequence")
     jp_p.add_argument("--max-joinpoints", type=int, default=2, help="Max joinpoints")
+    jp_p.add_argument("--json", action="store_true", help="Output results in JSON format")
 
     # PAF
     paf_p = sub.add_parser("paf", help="Calculate Population Attributable Fraction")
     paf_p.add_argument("--prevalence", "-p", type=float, required=True, help="Exposure prevalence (0 to 1)")
     paf_p.add_argument("--rr", "-r", type=float, required=True, help="Relative Risk (>= 1.0)")
+    paf_p.add_argument("--json", action="store_true", help="Output results in JSON format")
 
     # Forecast
     fc_p = sub.add_parser("forecast", help="Extrapolate rates forward")
     fc_p.add_argument("--years", nargs="+", type=int, required=True, help="Historical years")
     fc_p.add_argument("--rates", nargs="+", type=float, required=True, help="Historical rates")
     fc_p.add_argument("--horizon", type=int, default=5, help="Years to forecast")
+    fc_p.add_argument("--json", action="store_true", help="Output results in JSON format")
 
     # Batch CSV
     b_p = sub.add_parser("batch", help="Process Age-Period rates CSV")

@@ -1,126 +1,121 @@
-# Age Period Cohort Analyzer
+# Age-Period-Cohort (APC) Epidemiological Analyzer
 
-> **Domain:** Clinical Decision Support & Biomedical Computing  
-> **Reference Guidelines & Standards:** `Standard Clinical Formulations & ISO/IEC Quality Frameworks`
+A pure Python epidemiological and demographic statistical engine implementing:
+- Poisson log-linear Age-Period-Cohort modeling (Holford 1983, Clayton & Schifflers 1987).
+- Invariant estimable functions resolving the fundamental APC identification problem ($C = P - A$): Net Drift, Local Drifts, and second-order Curvatures.
+- Cohort and Period Relative Risks (RR) referenced to arbitrary reference cohorts/periods.
+- Hierarchical model comparison: Age-only (A), Age-Period (AP), Age-Cohort (AC), and Age-Period-Cohort (APC).
+- Goodness-of-fit assessment: Deviance ($G^2$), Degrees of Freedom, AIC, and BIC.
+- Joinpoint segmented regression for inflection detection and Annual Percent Change (APC %).
+- Population Attributable Fraction (PAF) calculations via Levin and Miettinen formulations.
+- Trend forecasting and rate extrapolation with 95% confidence intervals.
 
-<div align="center">
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-![Python](https://img.shields.io/badge/Python-3.10%20%7C%203.11%20%7C%203.12-3776AB.svg?logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688.svg?logo=fastapi&logoColor=white)
-![Audit Trail](https://img.shields.io/badge/Audit-HMAC--SHA256_Tamper--Evident-brightgreen.svg)
-![Zero-PHI Guard](https://img.shields.io/badge/Guard-Zero--PHI_Outbound-blue.svg)
-![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg?logo=docker&logoColor=white)
-
-</div>
+Requires Python standard library only (zero external runtime dependencies).
 
 ---
 
-## 📖 What It Does
+## Features
 
-Age-Period-Cohort (APC) Statistical Analyzer
-============================================
-A pure Python standard library epidemiological and demographic statistical engine implementing:
-- Poisson log-linear Age-Period-Cohort modeling (Holford 1983, Clayton & Schifflers 1987)
-- Identifiable estimable functions: Net Drift, Local Drifts, Age/Period/Cohort Curvatures (second differences)
-- Cohort and Period Relative Risks (RR) referenced to arbitrary reference categories
-- Model comparison: Age-only (A), Age-Period (AP), Age-Cohort (AC), Age-Period-Cohort (APC)
-- Deviance, Pearson Chi-Square, AIC, BIC, Likelihood Ratio Tests
-- Joinpoint regression for trend inflection point detection with annual percent change (APC %)
-- Population Attributable Fraction (PAF) via Levin and Miettinen formulations
-- Net-drift temporal trend extrapolation and rate forecasting with 95% confidence intervals.
-
-Enrichment Features for Age-Period-Cohort Analyzer
-Re-exports forecasting, joinpoint regression, and PAF tools.
+- **Identification Problem Resolution:** Solves the linear dependency ($P - A - C = 0$) using Holford's orthogonal decomposition into invariant curvature components and estimable linear drifts.
+- **Net Drift & Local Drifts:** Calculates overall log-linear drift across time and cohort along with age-specific local drifts.
+- **Model Hierarchy & Fit Selection:** Automatically fits nested sub-models (A, AP, AC, APC) to isolate independent temporal effects.
+- **Piecewise Joinpoint Regression:** Detects trend inflections (permutation-free grid search over grid intervals) and reports Segment Annual Percent Change (APC) and Average Annual Percent Change (AAPC).
+- **Attributable Risk Metrics:** Levin's formula for population exposure and Miettinen's formula for case-exposure cohorts.
+- **Batch CSV Processing:** High-throughput processing and rate computation for multi-age and multi-period surveillance tables.
 
 ---
 
-## ⚙️ Key Capabilities & Algorithmic Modules
+## Installation & Requirements
 
-### 🔬 Core Algorithmic & Evaluation Engines
+- Python 3.10+ (tested on 3.10, 3.11, 3.12)
+- Zero external runtime dependencies. `pytest` is optional for running tests.
 
-- **`OLSFitResult`** — dedicated module for o l s fit result evaluation and state verification.
-- **`APCCell`**: Individual Age-Period table cell.
-- **`APCTable`**: 2D Age x Period data matrix with derived diagonal Cohorts (C = P - A).
-- **`EstimableFunctionsResult`**: Holford (1983) and Clayton-Schifflers (1987) invariant estimable parameters.
-- **`APCModelFit`**: Goodness-of-fit and parameters for an evaluated log-linear model.
-- **`JoinpointSegment`** — dedicated module for joinpoint segment evaluation and state verification.
-
----
-
-## 📐 Mathematical Formulation & Logic
-
-```text
-  - Population Attributable Fraction (PAF) via Levin and Miettinen formulations
-  Levin's formula for population attributable fraction:
-  Miettinen's formula (case-based exposure prevalence):
+```bash
+git clone https://github.com/abusuraihsakhri/age-period-cohort-analyzer.git
+cd age-period-cohort-analyzer
 ```
 
 ---
 
-## 💻 CLI Quickstart & Usage
+## CLI Usage
 
-### 1. Guided Interactive Mode
+### 1. Population Attributable Fraction (PAF)
+Calculate Levin's PAF from prevalence and relative risk:
 ```bash
-python cli.py
+python cli.py paf --prevalence 0.25 --rr 2.4
+```
+Output as JSON:
+```bash
+python cli.py paf --prevalence 0.25 --rr 2.4 --json
 ```
 
-### 2. Direct Parameterized Evaluation
+### 2. Piecewise Joinpoint Regression
+Detect trend inflections in rates:
 ```bash
-python cli.py --interactive <value> --demo <value> --json <value> --years <value>
+python cli.py joinpoint --years 2000 2002 2004 2006 2008 2010 2012 2014 --rates 80.0 76.0 71.0 65.0 58.0 50.0 43.0 35.0
+```
+Output as JSON:
+```bash
+python cli.py joinpoint --years 2000 2002 2004 2006 2008 2010 2012 2014 --rates 80.0 76.0 71.0 65.0 58.0 50.0 43.0 35.0 --json
 ```
 
-### Parameter Reference
-- `--interactive`: Specifies input measurement or parameter value.
-- `--demo`: Specifies input measurement or parameter value.
-- `--json`: Specifies input measurement or parameter value.
-- `--years`: Specifies input measurement or parameter value.
-- `--rates`: Specifies input measurement or parameter value.
-- `--max-joinpoints`: Specifies input measurement or parameter value.
-- `--prevalence`: Specifies input measurement or parameter value.
-- `--rr`: Specifies input measurement or parameter value.
-- `--horizon`: Specifies input measurement or parameter value.
-- `--input`: Specifies input measurement or parameter value.
+### 3. Trend Rate Forecasting
+Forecast future incidence rates:
+```bash
+python cli.py forecast --years 2010 2012 2014 2016 2018 --rates 40.0 38.0 36.0 34.0 32.0 --horizon 4 --json
+```
 
-### Input Data Schema
+### 4. Run SEER Benchmark Demo
+```bash
+python cli.py --demo
+```
 
-| Field | Description | Requirement |
-|:------|:------------|:------------|
-| `id` | Parameter / observation metric | Required |
-| `value` | Parameter / observation metric | Required |
-| `qty` | Parameter / observation metric | Required |
+### 5. Batch CSV Processing
+Process epidemiological cohort tables:
+```bash
+python cli.py batch --input sample.csv --output results.csv
+```
 
 ---
 
-## 🛡️ Security & Enterprise Architecture
+## Python API Quickstart
 
-* **Zero-PHI Outbound Interceptor:** Active AST and regex inspection blocking SSNs, MRNs, phone numbers, and patient identifiers.
-* **Tamper-Evident HMAC-SHA256 Audit Trail:** Chained, cryptographically signed logs for every evaluation and state transition.
-* **Air-Gapped LLM Reasoning Adapter:** Agnostic integration for local Ollama instances (`llama3`, `mistral`), Claude 3.5 Sonnet, GPT-4o, and deterministic test mocks.
-* **Active Learning Bayesian Calibration:** Dynamic tracker updating worker reliability weights and monitoring Brier calibration drift.
-* **FastAPI & Prometheus Telemetry:** Exposes OpenAPI 3.1 REST endpoints and operational Prometheus metrics (`/metrics`).
+```python
+from apc_analyzer import (
+    REFERENCE_DATASETS,
+    APCStatisticalEngine,
+    PAFCalculator,
+    JoinpointAnalyzer,
+)
+
+# 1. Evaluate SEER Lung Cancer benchmark dataset
+seer_data = REFERENCE_DATASETS["seer_male_lung_cancer"]
+report = APCStatisticalEngine.analyze_table(seer_data)
+print(f"Net Drift: {report.estimable_functions.net_drift_pct:+.2f}% / year")
+print(f"Best Fitting Model: {report.best_fitting_model}")
+
+# 2. Population Attributable Fraction (PAF)
+paf = PAFCalculator.levin_paf(prevalence=0.20, relative_risk=5.0)
+print(f"PAF: {paf * 100:.1f}%")
+
+# 3. Joinpoint analysis
+jp = JoinpointAnalyzer.fit(
+    years=[2000, 2002, 2004, 2006, 2008, 2010, 2012, 2014],
+    rates=[80.0, 76.0, 71.0, 65.0, 58.0, 50.0, 43.0, 35.0],
+    max_joinpoints=2,
+)
+print(f"AAPC: {jp.average_annual_percent_change:+.2f}% / year | Joinpoints: {jp.joinpoints}")
+```
 
 ---
 
-## 🧪 Testing & Verification
+## Running Tests
 
-Run the automated test suite:
+Run the test suite using standard `unittest` or `pytest`:
 
 ```bash
+python test_apc_analyzer.py
+# or
 pytest -v
 ```
 
-Execute high-throughput batch simulation benchmarks:
-
-```bash
-python simulator.py --tasks 1000 --concurrency 8
-```
-
----
-
-## 🐳 Container Deployment
-
-```bash
-docker build -t age-period-cohort-analyzer .
-docker run -p 8000:8000 age-period-cohort-analyzer
-```

@@ -1,4 +1,4 @@
-name: Age Period Cohort Analyzer CI/CD & Security Verification
+name: CI
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
     branches: [ master, main ]
 
 jobs:
-  test-and-audit:
+  test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -21,20 +21,17 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
-    - name: Install dependencies
+    - name: Install test dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install fastapi uvicorn pydantic pytest
+        pip install pytest
 
-    - name: Run Pytest Suite
+    - name: Run Test Suite
       run: |
         pytest -v
 
-    - name: Security SAST & Zero-PHI Audit
+    - name: Verify CLI Smoke Test
       run: |
-        python -c "
-        from agents.base import PHIGuard, AuditLogger
-        import pytest
-        assert AuditLogger.verify_integrity() is True
-        print('Security & Zero-PHI Audit Passed!')
-        "
+        python cli.py paf --prevalence 0.25 --rr 2.4 --json
+        python cli.py batch --input sample.csv --output out_smoke.csv
+
