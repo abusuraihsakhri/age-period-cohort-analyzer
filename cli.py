@@ -13,6 +13,7 @@ import csv
 import json
 import sys
 from dataclasses import asdict
+from pathlib import Path
 from typing import List, Optional
 
 from apc_analyzer import (
@@ -245,9 +246,28 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.command == "batch":
         try:
-            with open(args.input, "r", newline="", encoding="utf-8-sig") as f_in:
+            # Security: Validate paths to prevent path traversal
+            input_path = Path(args.input).resolve()
+            output_path = Path(args.output).resolve()
+
+            # Ensure input file exists and is a regular file
+            if not input_path.is_file():
+                print(f"Error: Input file not found: {args.input}", file=sys.stderr)
+                return 1
+
+            # Security: Reject paths that try to access sensitive locations
+            # Only allow alphanumeric, hyphen, underscore, dot in filenames
+            if any(part.startswith('.') and part not in ('.', '..') for part in input_path.parts):
+                print("Error: Hidden directory traversal not allowed", file=sys.stderr)
+                return 1
+
+            with open(input_path, "r", newline="", encoding="utf-8-sig") as f_in:
                 reader = csv.DictReader(f_in)
                 rows = list(reader)
+
+            if not rows:
+                print("Warning: Input CSV has no data rows", file=sys.stderr)
+
             out_rows = []
             for r in rows:
                 ev = float(r.get("events", r.get("cases", 0.0)))
@@ -260,7 +280,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "person_years": py,
                     "rate_per_100k": round(rate, 2),
                 })
-            with open(args.output, "w", newline="", encoding="utf-8") as f_out:
+            with open(output_path, "w", newline="", encoding="utf-8") as f_out:
                 if out_rows:
                     writer = csv.DictWriter(f_out, fieldnames=list(out_rows[0].keys()))
                     writer.writeheader()

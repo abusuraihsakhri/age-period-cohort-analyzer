@@ -268,6 +268,67 @@ class TestCLIWorkflows(unittest.TestCase):
             self.assertTrue(os.path.exists(out_csv))
 
 
+class TestAnalyzeTable(unittest.TestCase):
+    """Test the analyze_table convenience method."""
+
+    def test_analyze_table_returns_report(self):
+        seer_data = REFERENCE_DATASETS["seer_male_lung_cancer"]
+        report = APCStatisticalEngine.analyze_table(seer_data)
+        self.assertIsNotNone(report.estimable_functions)
+        self.assertIsNotNone(report.model_comparisons)
+        self.assertIsNotNone(report.best_fitting_model)
+        self.assertGreater(len(report.model_comparisons), 0)
+
+    def test_analyze_table_uses_aic_for_best_model(self):
+        seer_data = REFERENCE_DATASETS["seer_male_lung_cancer"]
+        report = APCStatisticalEngine.analyze_table(seer_data)
+        # Best model should be the one with lowest AIC
+        best_by_aic = min(report.model_comparisons, key=lambda m: m.aic)
+        self.assertEqual(report.best_fitting_model, best_by_aic.model_type)
+
+    def test_dataset_key_aliases(self):
+        """Both 'us_lung_cancer_male' and 'seer_male_lung_cancer' should work."""
+        ds1 = REFERENCE_DATASETS["us_lung_cancer_male"]
+        ds2 = REFERENCE_DATASETS["seer_male_lung_cancer"]
+        self.assertEqual(ds1, ds2)
+
+
+class TestTwoJoinpoints(unittest.TestCase):
+    """Test 2-joinpoint search in JoinpointAnalyzer."""
+
+    def test_two_joinpoints_supported(self):
+        # Create data with two clear inflection points
+        years = [1990, 1992, 1994, 1996, 1998, 2000, 2002, 2004, 2006, 2008, 2010, 2012, 2014, 2016, 2018]
+        rates = [50.0, 50.5, 49.8, 50.2, 49.7, 45.0, 38.0, 30.0, 22.0, 15.0, 14.5, 15.2, 14.8, 15.1, 14.9]
+        res = JoinpointAnalyzer.fit(years, rates, max_joinpoints=2, min_segment_length=4)
+        # Should find at least 1 joinpoint with this clear pattern
+        self.assertGreaterEqual(len(res.segments), 1)
+        self.assertIsInstance(res.average_annual_percent_change, float)
+
+
+class TestBatchSecurity(unittest.TestCase):
+    """Test batch command security features."""
+
+    def test_batch_missing_input_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = os.path.join(tmpdir, "nonexistent.csv")
+            out_csv = os.path.join(tmpdir, "out.csv")
+            ret = cli.main(["batch", "--input", missing, "--output", out_csv])
+            self.assertEqual(ret, 1)
+
+    def test_batch_empty_csv(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            in_csv = os.path.join(tmpdir, "empty.csv")
+            out_csv = os.path.join(tmpdir, "out.csv")
+            with open(in_csv, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["age_group", "period", "events", "person_years"])
+                # No data rows
+            ret = cli.main(["batch", "--input", in_csv, "--output", out_csv])
+            self.assertEqual(ret, 0)
+            self.assertTrue(os.path.exists(out_csv))
+
+
 if __name__ == "__main__":
     unittest.main()
 

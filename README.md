@@ -18,10 +18,10 @@ Requires Python standard library only (zero external runtime dependencies).
 
 - **Identification Problem Resolution:** Solves the linear dependency ($P - A - C = 0$) using Holford's orthogonal decomposition into invariant curvature components and estimable linear drifts.
 - **Net Drift & Local Drifts:** Calculates overall log-linear drift across time and cohort along with age-specific local drifts.
-- **Model Hierarchy & Fit Selection:** Automatically fits nested sub-models (A, AP, AC, APC) to isolate independent temporal effects.
-- **Piecewise Joinpoint Regression:** Detects trend inflections (permutation-free grid search over grid intervals) and reports Segment Annual Percent Change (APC) and Average Annual Percent Change (AAPC).
+- **Model Hierarchy & Fit Selection:** Automatically fits nested sub-models (A, AP, AC, APC) and selects best fit by AIC.
+- **Piecewise Joinpoint Regression:** Detects trend inflections (grid search over valid split points) and reports Segment Annual Percent Change (APC) and Average Annual Percent Change (AAPC). Supports up to 2 joinpoints.
 - **Attributable Risk Metrics:** Levin's formula for population exposure and Miettinen's formula for case-exposure cohorts.
-- **Batch CSV Processing:** High-throughput processing and rate computation for multi-age and multi-period surveillance tables.
+- **Batch CSV Processing:** High-throughput processing and rate computation for multi-age and multi-period surveillance tables with input validation.
 
 ---
 
@@ -69,9 +69,13 @@ python cli.py forecast --years 2010 2012 2014 2016 2018 --rates 40.0 38.0 36.0 3
 ```bash
 python cli.py --demo
 ```
+Or output as JSON:
+```bash
+python cli.py --demo --json
+```
 
 ### 5. Batch CSV Processing
-Process epidemiological cohort tables:
+Process epidemiological cohort tables with path validation:
 ```bash
 python cli.py batch --input sample.csv --output results.csv
 ```
@@ -98,7 +102,7 @@ print(f"Best Fitting Model: {report.best_fitting_model}")
 paf = PAFCalculator.levin_paf(prevalence=0.20, relative_risk=5.0)
 print(f"PAF: {paf * 100:.1f}%")
 
-# 3. Joinpoint analysis
+# 3. Joinpoint analysis (supports up to 2 joinpoints)
 jp = JoinpointAnalyzer.fit(
     years=[2000, 2002, 2004, 2006, 2008, 2010, 2012, 2014],
     rates=[80.0, 76.0, 71.0, 65.0, 58.0, 50.0, 43.0, 35.0],
@@ -114,8 +118,41 @@ print(f"AAPC: {jp.average_annual_percent_change:+.2f}% / year | Joinpoints: {jp.
 Run the test suite using standard `unittest` or `pytest`:
 
 ```bash
+# Run root-level test suite
 python test_apc_analyzer.py
 # or
+pytest test_apc_analyzer.py -v
+
+# Run tests in tests/ directory (includes additional JSON and sample CSV tests)
+pytest tests/test_apc_analyzer.py -v
+
+# Run all tests
 pytest -v
 ```
 
+---
+
+## Project Structure
+
+```
+age-period-cohort-analyzer/
+├── apc_analyzer.py          # Core statistical engine (OLS, APC models, Joinpoint, PAF, Forecasting)
+├── cli.py                   # Command-line interface
+├── apc_enrichment_features.py  # Compatibility wrappers and re-exports
+├── test_apc_analyzer.py     # Root-level unit tests (24 tests)
+├── tests/
+│   ├── __init__.py
+│   └── test_apc_analyzer.py # Extended test suite (26 tests, includes JSON/CSV tests)
+├── sample.csv               # Sample batch input data
+├── benchmark_dataset.json   # Golden benchmark test cases
+├── LICENSE                  # MIT License
+└── README.md                # This file
+```
+
+---
+
+## Security Features
+
+- **Path validation:** Batch command validates input/output paths and rejects hidden directory traversal
+- **Input sanitization:** All numeric inputs validated for range and type
+- **Zero external dependencies:** Eliminates supply chain attack surface

@@ -346,50 +346,159 @@ class APCStatisticalEngine:
         n_p = len(table.periods)
         n_c = n_a + n_p - 1
 
+        # Precompute marginal totals for efficiency
+        age_d = {}
+        age_y = {}
+        for c in table.cells:
+            age_d[c.age_idx] = age_d.get(c.age_idx, 0.0) + c.events
+            age_y[c.age_idx] = age_y.get(c.age_idx, 0.0) + c.person_years
+
+        period_d = {}
+        period_y = {}
+        for c in table.cells:
+            period_d[c.period_idx] = period_d.get(c.period_idx, 0.0) + c.events
+            period_y[c.period_idx] = period_y.get(c.period_idx, 0.0) + c.person_years
+
+        cohort_d = {}
+        cohort_y = {}
+        for c in table.cells:
+            cohort_d[c.cohort_idx] = cohort_d.get(c.cohort_idx, 0.0) + c.events
+            cohort_y[c.cohort_idx] = cohort_y.get(c.cohort_idx, 0.0) + c.person_years
+
         total_d = sum(c.events for c in table.cells)
         total_y = sum(c.person_years for c in table.cells)
 
+        def _poisson_deviance(mu_func):
+            """Compute Poisson deviance given a function that returns expected value for each cell."""
+            dev = 0.0
+            for c in table.cells:
+                mu = mu_func(c)
+                if c.events > 0 and mu > 0:
+                    dev += 2.0 * (c.events * math.log(c.events / mu) - (c.events - mu))
+                elif mu > 0:
+                    dev += 2.0 * mu
+            return dev
+
         models = []
 
-        # Model 1: Age Only
-        # mu_{ap} = y_{ap} * (D_a / Y_a)
-        dev_a = 0.0
-        for c in table.cells:
-            a_cells = [cell for cell in table.cells if cell.age_idx == c.age_idx]
-            d_a = sum(cell.events for cell in a_cells)
-            y_a = sum(cell.person_years for cell in a_cells)
-            mu = c.person_years * (d_a / y_a) if y_a > 0 else 0.0
-            if c.events > 0 and mu > 0:
-                dev_a += 2.0 * (c.events * math.log(c.events / mu) - (c.events - mu))
-            elif mu > 0:
-                dev_a += 2.0 * mu
+        # Model 1: Age Only - mu_{ap} = y_{ap} * (D_a / Y_a)
+        def mu_age(c):
+            return c.person_years * (age_d[c.age_idx] / age_y[c.age_idx]) if age_y[c.age_idx] > 0 else 0.0
+
+        dev_a = _poisson_deviance(mu_age)
         df_a = n_cells - n_a
         aic_a = dev_a + 2 * n_a
         bic_a = dev_a + math.log(n_cells) * n_a
         models.append(APCModelFit("Age-Only (A)", round(dev_a, 2), df_a, round(aic_a, 2), round(bic_a, 2), 0.0, round(-dev_a / 2, 2)))
 
-        # Model 2: Age-Period (AP)
-        dev_ap = dev_a * 0.45  # AP reduces deviance significantly
+        # Model 2: Age-Period (AP) - mu_{ap} = y_{ap} * (D_a / Y_a) * (D_p / Y_p) / (D_total / Y_total)
+        def mu_ap(c):
+            if age_y[c.age_idx] > 0 and period_y[c.period_idx] > 0 and total_y > 0:
+                return c.person_years * (age_d[c.age_idx] / age_y[c.age_idx]) * (period_d[c.period_idx] / period_y[c.period_idx]) / (total_d / total_y)
+            return 0.0
+
+        dev_ap = _poisson_deviance(mu_ap)
         df_ap = n_cells - (n_a + n_p - 1)
         aic_ap = dev_ap + 2 * (n_a + n_p - 1)
         bic_ap = dev_ap + math.log(n_cells) * (n_a + n_p - 1)
         models.append(APCModelFit("Age-Period (AP)", round(dev_ap, 2), df_ap, round(aic_ap, 2), round(bic_ap, 2), 0.0, round(-dev_ap / 2, 2)))
 
-        # Model 3: Age-Cohort (AC)
-        dev_ac = dev_a * 0.38
+        # Model 3: Age-Cohort (AC) - mu_{ap} = y_{ap} * (D_a / Y_a) * (D_c / Y_c) / (D_total / Y_total)
+        def mu_ac(c):
+            if age_y[c.age_idx] > 0 and cohort_y[c.cohort_idx] > 0 and total_y > 0:
+                return c.person_years * (age_d[c.age_idx] / age_y[c.age_idx]) * (cohort_d[c.cohort_idx] / cohort_y[c.cohort_idx]) / (total_d / total_y)
+            return 0.0
+
+        dev_ac = _poisson_deviance(mu_ac)
         df_ac = n_cells - (n_a + n_c - 1)
         aic_ac = dev_ac + 2 * (n_a + n_c - 1)
         bic_ac = dev_ac + math.log(n_cells) * (n_a + n_c - 1)
         models.append(APCModelFit("Age-Cohort (AC)", round(dev_ac, 2), df_ac, round(aic_ac, 2), round(bic_ac, 2), 0.0, round(-dev_ac / 2, 2)))
 
-        # Model 4: Full Age-Period-Cohort (APC)
-        dev_apc = dev_a * 0.15
+        # Model 4: Full Age-Period-Cohort (APC) - fitted via Iterative Proportional Fitting
+        # IPF converges to MLE for the APC model by iteratively adjusting for age, period, and cohort margins
+        mu_apc_fitted = {}
+        for c in table.cells:
+            mu_apc_fitted[(c.age_idx, c.period_idx)] = max(c.events, 0.5)
+
+        for _ in range(200):  # Max iterations for convergence
+            # Adjust for age margins
+            for a in range(n_a):
+                cells_a = [c for c in table.cells if c.age_idx == a]
+                observed_sum = sum(c.events for c in cells_a)
+                fitted_sum = sum(mu_apc_fitted[(c.age_idx, c.period_idx)] for c in cells_a)
+                if fitted_sum > 0:
+                    factor = observed_sum / fitted_sum
+                    for c in cells_a:
+                        mu_apc_fitted[(c.age_idx, c.period_idx)] *= factor
+
+            # Adjust for period margins
+            for p in range(n_p):
+                cells_p = [c for c in table.cells if c.period_idx == p]
+                observed_sum = sum(c.events for c in cells_p)
+                fitted_sum = sum(mu_apc_fitted[(c.age_idx, c.period_idx)] for c in cells_p)
+                if fitted_sum > 0:
+                    factor = observed_sum / fitted_sum
+                    for c in cells_p:
+                        mu_apc_fitted[(c.age_idx, c.period_idx)] *= factor
+
+            # Adjust for cohort margins
+            for c_idx in range(n_c):
+                cells_c = [c for c in table.cells if c.cohort_idx == c_idx]
+                observed_sum = sum(c.events for c in cells_c)
+                fitted_sum = sum(mu_apc_fitted[(c.age_idx, c.period_idx)] for c in cells_c)
+                if fitted_sum > 0:
+                    factor = observed_sum / fitted_sum
+                    for c in cells_c:
+                        mu_apc_fitted[(c.age_idx, c.period_idx)] *= factor
+
+        def mu_apc(c):
+            return mu_apc_fitted.get((c.age_idx, c.period_idx), c.events)
+
+        dev_apc = _poisson_deviance(mu_apc)
         df_apc = n_cells - (n_a + n_p + n_c - 2)
         aic_apc = dev_apc + 2 * (n_a + n_p + n_c - 2)
         bic_apc = dev_apc + math.log(n_cells) * (n_a + n_p + n_c - 2)
         models.append(APCModelFit("Age-Period-Cohort (APC)", round(dev_apc, 2), df_apc, round(aic_apc, 2), round(bic_apc, 2), 0.01, round(-dev_apc / 2, 2)))
 
         return models
+
+    @classmethod
+    def analyze_table(
+        cls,
+        dataset: Dict[str, Any],
+        ref_cohort_idx: Optional[int] = None,
+        ref_period_idx: Optional[int] = None,
+    ) -> ComprehensiveAPCReport:
+        """
+        Convenience method to analyze a reference dataset dictionary.
+        Expects keys: age_groups, periods, rates_per_100k, std_py (optional).
+        """
+        table = build_apc_table_from_matrix(
+            age_groups=dataset["age_groups"],
+            periods=dataset["periods"],
+            rates_matrix=dataset["rates_per_100k"],
+            person_years_per_cell=dataset.get("std_py", 100000.0),
+        )
+        estimable = cls.fit_estimable_functions(table, ref_cohort_idx, ref_period_idx)
+        models = cls.evaluate_model_hierarchy(table)
+
+        # Determine best fitting model by lowest AIC
+        best_model = min(models, key=lambda m: m.aic)
+
+        return ComprehensiveAPCReport(
+            table_summary={
+                "title": dataset.get("title", "Dataset"),
+                "num_ages": len(table.age_groups),
+                "num_periods": len(table.periods),
+                "num_cohorts": len(table.cohorts),
+                "age_groups": table.age_groups,
+                "periods": table.periods,
+            },
+            estimable_functions=estimable,
+            model_comparisons=models,
+            best_fitting_model=best_model.model_type,
+        )
 
 
 # ============================================================================
@@ -417,45 +526,65 @@ class JoinpointAnalyzer:
         xs = [float(y) for y in years]
         ys = [math.log(max(1e-10, r)) for r in rates]
 
-        best_jp: Optional[List[int]] = None
+        best_jp: List[int] = []
         best_sse = float("inf")
         best_segments: List[JoinpointSegment] = []
 
-        # Evaluate 0 joinpoint (single slope)
+        def _segment_info(x_seg, y_seg, year_start, year_end):
+            """Compute segment APC and CI for a sub-segment."""
+            fit = ordinary_least_squares(x_seg, y_seg)
+            apc = round((math.exp(fit.slope) - 1.0) * 100.0, 2)
+            se = fit.se_slope * 100.0
+            sse = sum((y - (fit.intercept + fit.slope * x)) ** 2 for x, y in zip(x_seg, y_seg))
+            ci = (round(apc - 1.96 * se, 2), round(apc + 1.96 * se, 2))
+            return apc, ci, sse
+
+        # Evaluate 0 joinpoints (single slope)
         fit0 = ordinary_least_squares(xs, ys)
         sse0 = sum((y - (fit0.intercept + fit0.slope * x)) ** 2 for x, y in zip(xs, ys))
         apc0 = round((math.exp(fit0.slope) - 1.0) * 100.0, 2)
         se0 = fit0.se_slope * 100.0
-        seg0 = [JoinpointSegment(start_year=years[0], end_year=years[-1], apc_pct=apc0, apc_ci=(round(apc0 - 1.96*se0, 2), round(apc0 + 1.96*se0, 2)))]
-
         best_jp = []
         best_sse = sse0
-        best_segments = seg0
+        best_segments = [JoinpointSegment(years[0], years[-1], apc0, (round(apc0 - 1.96 * se0, 2), round(apc0 + 1.96 * se0, 2)))]
 
-        # Evaluate 1 and 2 joinpoints if series length permits
+        # Evaluate 1 joinpoint if series length permits
         if max_joinpoints >= 1 and n >= min_segment_length * 2:
             for split1 in range(min_segment_length, n - min_segment_length + 1):
-                f1 = ordinary_least_squares(xs[:split1], ys[:split1])
-                f2 = ordinary_least_squares(xs[split1:], ys[split1:])
-                sse1 = sum((y - (f1.intercept + f1.slope * x)) ** 2 for x, y in zip(xs[:split1], ys[:split1]))
-                sse2 = sum((y - (f2.intercept + f2.slope * x)) ** 2 for x, y in zip(xs[split1:], ys[split1:]))
+                apc1, ci1, sse1 = _segment_info(xs[:split1], ys[:split1], years[0], years[split1 - 1])
+                apc2, ci2, sse2 = _segment_info(xs[split1:], ys[split1:], years[split1], years[-1])
                 tot_sse = sse1 + sse2
                 if tot_sse < best_sse:
                     best_sse = tot_sse
                     best_jp = [years[split1]]
-                    apc_s1 = round((math.exp(f1.slope) - 1.0) * 100.0, 2)
-                    apc_s2 = round((math.exp(f2.slope) - 1.0) * 100.0, 2)
                     best_segments = [
-                        JoinpointSegment(years[0], years[split1 - 1], apc_s1, (round(apc_s1 - 1.96*f1.se_slope*100, 2), round(apc_s1 + 1.96*f1.se_slope*100, 2))),
-                        JoinpointSegment(years[split1], years[-1], apc_s2, (round(apc_s2 - 1.96*f2.se_slope*100, 2), round(apc_s2 + 1.96*f2.se_slope*100, 2))),
+                        JoinpointSegment(years[0], years[split1 - 1], apc1, ci1),
+                        JoinpointSegment(years[split1], years[-1], apc2, ci2),
                     ]
+
+        # Evaluate 2 joinpoints if series length permits
+        if max_joinpoints >= 2 and n >= min_segment_length * 3:
+            for split1 in range(min_segment_length, n - 2 * min_segment_length + 1):
+                apc1, ci1, sse1 = _segment_info(xs[:split1], ys[:split1], years[0], years[split1 - 1])
+                for split2 in range(split1 + min_segment_length, n - min_segment_length + 1):
+                    apc2, ci2, sse2 = _segment_info(xs[split1:split2], ys[split1:split2], years[split1], years[split2 - 1])
+                    apc3, ci3, sse3 = _segment_info(xs[split2:], ys[split2:], years[split2], years[-1])
+                    tot_sse = sse1 + sse2 + sse3
+                    if tot_sse < best_sse:
+                        best_sse = tot_sse
+                        best_jp = [years[split1], years[split2]]
+                        best_segments = [
+                            JoinpointSegment(years[0], years[split1 - 1], apc1, ci1),
+                            JoinpointSegment(years[split1], years[split2 - 1], apc2, ci2),
+                            JoinpointSegment(years[split2], years[-1], apc3, ci3),
+                        ]
 
         # Average Annual Percent Change (AAPC)
         total_span = years[-1] - years[0]
         weighted_apc = sum(seg.apc_pct * (seg.end_year - seg.start_year + 1) for seg in best_segments) / max(1, total_span + 1)
 
         return JoinpointResult(
-            joinpoints=best_jp if best_jp is not None else [],
+            joinpoints=best_jp,
             segments=best_segments,
             average_annual_percent_change=round(weighted_apc, 2),
             sse=round(best_sse, 4),
@@ -525,22 +654,25 @@ class TrendForecaster:
 # Built-In Reference Epidemiology Datasets
 # ============================================================================
 
+_REFERENCE_DATASET_US_LUNG_MALE = {
+    "title": "US Male Lung & Bronchus Cancer Incidence (SEER 1975-2015)",
+    "age_groups": ["40-44", "45-49", "50-54", "55-59", "60-64", "65-69", "70-74"],
+    "periods": ["1975-1979", "1980-1984", "1985-1989", "1990-1994", "1995-1999", "2000-2004", "2005-2009", "2010-2014"],
+    "rates_per_100k": [
+        [18.2, 16.5, 14.1, 12.0, 9.5, 7.8, 6.2, 4.9],
+        [54.0, 50.1, 44.5, 38.0, 31.2, 25.0, 20.1, 16.5],
+        [122.0, 118.5, 108.0, 95.2, 81.0, 68.5, 55.4, 44.2],
+        [225.0, 230.0, 218.0, 198.0, 172.0, 148.0, 125.0, 102.0],
+        [340.0, 365.0, 360.0, 335.0, 301.0, 265.0, 228.0, 192.0],
+        [440.0, 485.0, 502.0, 485.0, 448.0, 402.0, 355.0, 305.0],
+        [490.0, 560.0, 605.0, 610.0, 580.0, 535.0, 480.0, 420.0],
+    ],
+    "std_py": 100000.0,
+}
+
 REFERENCE_DATASETS = {
-    "us_lung_cancer_male": {
-        "title": "US Male Lung & Bronchus Cancer Incidence (SEER 1975-2015)",
-        "age_groups": ["40-44", "45-49", "50-54", "55-59", "60-64", "65-69", "70-74"],
-        "periods": ["1975-1979", "1980-1984", "1985-1989", "1990-1994", "1995-1999", "2000-2004", "2005-2009", "2010-2014"],
-        "rates_per_100k": [
-            [18.2, 16.5, 14.1, 12.0, 9.5, 7.8, 6.2, 4.9],
-            [54.0, 50.1, 44.5, 38.0, 31.2, 25.0, 20.1, 16.5],
-            [122.0, 118.5, 108.0, 95.2, 81.0, 68.5, 55.4, 44.2],
-            [225.0, 230.0, 218.0, 198.0, 172.0, 148.0, 125.0, 102.0],
-            [340.0, 365.0, 360.0, 335.0, 301.0, 265.0, 228.0, 192.0],
-            [440.0, 485.0, 502.0, 485.0, 448.0, 402.0, 355.0, 305.0],
-            [490.0, 560.0, 605.0, 610.0, 580.0, 535.0, 480.0, 420.0],
-        ],
-        "std_py": 100000.0,
-    }
+    "us_lung_cancer_male": _REFERENCE_DATASET_US_LUNG_MALE,
+    "seer_male_lung_cancer": _REFERENCE_DATASET_US_LUNG_MALE,
 }
 
 
