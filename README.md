@@ -1,5 +1,7 @@
 # Age-Period-Cohort Analyzer
 
+### [Open the Live Application →](https://abusuraihsakhri.github.io/age-period-cohort-analyzer/)
+
 A dependency-free Python toolkit and browser interface for age-period-cohort trend exploration using event counts and person-time denominators.
 
 ## What it does
@@ -82,7 +84,7 @@ python -m compileall -q .
 node --check docs/app.js
 ```
 
-CI runs the Python tests on supported CPython versions and validates the browser JavaScript syntax.
+CI runs the Python tests on supported CPython versions and validates the browser JavaScript syntax. The Pages deployment workflow also performs HTTP smoke checks against the deployed HTML, JavaScript, and CSS.
 
 ## Browser compatibility
 

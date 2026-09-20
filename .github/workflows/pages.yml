@@ -20,6 +20,7 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -32,3 +33,16 @@ jobs:
       - name: Deploy Pages
         id: deployment
         uses: actions/deploy-pages@v4
+      - name: Verify live site
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location             --retry 8 --retry-delay 3 --retry-all-errors             "$PAGE_URL" -o /tmp/index.html
+          grep -Fq "Age-Period-Cohort Analyzer" /tmp/index.html
+
+          curl --fail --silent --show-error --location             --retry 8 --retry-delay 3 --retry-all-errors             "${PAGE_URL}app.js" -o /tmp/app.js
+          grep -Fq "analyzeButton" /tmp/app.js
+
+          curl --fail --silent --show-error --location             --retry 8 --retry-delay 3 --retry-all-errors             "${PAGE_URL}styles.css" -o /tmp/styles.css
+          grep -Fq ".analysis-grid" /tmp/styles.css
