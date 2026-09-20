@@ -1,108 +1,75 @@
 #!/usr/bin/env python3
-"""
-Command-Line Interface for Age-Period-Cohort (APC) Analyzer
-===========================================================
-Provides interactive and scriptable workflows for APC modeling,
-Holford estimable functions, joinpoint regression, and PAF calculations.
-"""
+"""Command-line interface for the age-period-cohort analyzer."""
 
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+import math
 import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import List, Optional
 
 from apc_analyzer import (
-    APCTable,
-    APCCell,
     APCStatisticalEngine,
+    ComprehensiveAPCReport,
     JoinpointAnalyzer,
     PAFCalculator,
-    TrendForecaster,
     REFERENCE_DATASETS,
-    build_apc_table_from_matrix,
-    ComprehensiveAPCReport,
+    TrendForecaster,
+    build_apc_table_from_records,
 )
 
 
 def format_apc_report(rep: ComprehensiveAPCReport) -> str:
     lines = [
-        "=" * 80,
-        " AGE-PERIOD-COHORT (APC) STATISTICAL ANALYSIS REPORT",
-        "=" * 80,
-        f"Data Matrix Summary: {rep.table_summary.get('title', 'Dataset')}",
-        f"  - Age Groups:     {rep.table_summary.get('num_ages')} bands ({', '.join(rep.table_summary.get('age_groups', []))})",
-        f"  - Time Periods:   {rep.table_summary.get('num_periods')} intervals ({', '.join(rep.table_summary.get('periods', []))})",
-        f"  - Derived Cohorts:{rep.table_summary.get('num_cohorts')} birth cohorts",
-        "-" * 80,
-        "Identifiable Estimable Functions (Holford / Clayton-Schifflers):",
-        f"  - Net Drift:       {rep.estimable_functions.net_drift_pct:+.2f}% per year [95% CI: {rep.estimable_functions.net_drift_ci[0]:+.2f}%, {rep.estimable_functions.net_drift_ci[1]:+.2f}%]",
-        f"  - Reference Period:{rep.estimable_functions.reference_period}",
-        f"  - Reference Cohort:{rep.estimable_functions.reference_cohort}",
-        "\nLocal Drifts (Age-Specific Annual % Change):",
+        "=" * 78,
+        " AGE-PERIOD-COHORT TREND ANALYSIS",
+        "=" * 78,
+        f"Dataset: {rep.table_summary.get('title', 'Dataset')}",
+        f"Age groups: {rep.table_summary.get('num_ages')} | Periods: {rep.table_summary.get('num_periods')} | Cohorts: {rep.table_summary.get('num_cohorts')}",
+        "-" * 78,
+        "Descriptive period trends",
+        f"Age-adjusted period trend: {rep.estimable_functions.net_drift_pct:+.3f}%/year "
+        f"(95% CI {rep.estimable_functions.net_drift_ci[0]:+.3f} to {rep.estimable_functions.net_drift_ci[1]:+.3f})",
+        "Age-specific period trends:",
     ]
     for age, drift in rep.estimable_functions.local_drifts.items():
-        lines.append(f"  * Age {age:>6}: {drift:+.2f}% / year")
+        lines.append(f"  {age:>12}: {drift:+.3f}%/year")
 
-    lines.append("\nCohort Relative Risks (RR vs. Reference Cohort):")
-    for coh, rr in rep.estimable_functions.cohort_relative_risks.items():
-        lines.append(f"  * {coh:>12}: RR = {rr:.3f}")
-
-    lines.append("-" * 80)
-    lines.append("Nested Model Hierarchy & Goodness-of-Fit Comparison:")
-    header = f"{'Model Type':<25} | {'Deviance G^2':<12} | {'DF':<5} | {'AIC':<10} | {'BIC':<10}"
-    lines.append(header)
-    lines.append("-" * len(header))
-    for m in rep.model_comparisons:
-        lines.append(f"{m.model_type:<25} | {m.deviance:<12.2f} | {m.degrees_of_freedom:<5} | {m.aic:<10.2f} | {m.bic:<10.2f}")
-    lines.append(f"\nBest-Fitting Model: {rep.best_fitting_model}")
-
-    if rep.joinpoint:
-        lines.append("-" * 80)
-        lines.append(f"Joinpoint Regression (AAPC = {rep.joinpoint.average_annual_percent_change:+.2f}%/year):")
-        lines.append(f"  - Detected Inflection Years: {rep.joinpoint.joinpoints}")
-        for seg in rep.joinpoint.segments:
-            lines.append(f"  * Segment {seg.start_year}-{seg.end_year}: APC = {seg.apc_pct:+.2f}% [95% CI: {seg.apc_ci[0]:+.2f}%, {seg.apc_ci[1]:+.2f}%]")
-
-    if rep.forecasts:
-        lines.append("-" * 80)
-        lines.append("Rate Extrapolations (Forecast):")
-        for fc in rep.forecasts:
-            lines.append(f"  * Year {fc.year}: {fc.predicted_rate:.2f} per 100k [95% CI: {fc.ci_lower:.2f} - {fc.ci_upper:.2f}]")
-
-    lines.append("=" * 80)
+    lines += [
+        "-" * 78,
+        "Poisson log-linear model comparison",
+        f"{'Model':<28} {'Deviance':>10} {'df':>6} {'AIC':>12} {'BIC':>12} {'GOF p':>10}",
+    ]
+    for model in rep.model_comparisons:
+        ptxt = f"{model.p_value:.4g}" if math.isfinite(model.p_value) else "n/a"
+        lines.append(
+            f"{model.model_type:<28} {model.deviance:>10.3f} {model.degrees_of_freedom:>6} "
+            f"{model.aic:>12.3f} {model.bic:>12.3f} {ptxt:>10}"
+        )
+    lines.append(f"Lowest-AIC model: {rep.best_fitting_model}")
+    lines.append("=" * 78)
     return "\n".join(lines)
 
 
-def run_demo(as_json: bool = False) -> int:
-    """Run APC analysis on reference SEER Male Lung Cancer dataset."""
-    ds = REFERENCE_DATASETS["us_lung_cancer_male"]
-    table = build_apc_table_from_matrix(
-        age_groups=ds["age_groups"],
-        periods=ds["periods"],
-        rates_matrix=ds["rates_per_100k"],
-        person_years_per_cell=ds["std_py"],
-    )
-
+def _analyze_csv(path: Path) -> ComprehensiveAPCReport:
+    if not path.is_file():
+        raise ValueError(f"input file not found: {path}")
+    with path.open("r", newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        required = {"age_group", "period", "events", "person_years"}
+        if not reader.fieldnames or not required.issubset(reader.fieldnames):
+            raise ValueError("CSV must contain age_group, period, events, and person_years columns")
+        rows = list(reader)
+    table = build_apc_table_from_records(rows)
     estimable = APCStatisticalEngine.fit_estimable_functions(table)
     models = APCStatisticalEngine.evaluate_model_hierarchy(table)
-
-    # Joinpoint on overall period rate trend
-    years = [1977, 1982, 1987, 1992, 1997, 2002, 2007, 2012]
-    mean_rates = [sum(ds["rates_per_100k"][a][p] for a in range(len(ds["age_groups"]))) / len(ds["age_groups"]) for p in range(len(years))]
-    jp = JoinpointAnalyzer.fit(years, mean_rates, max_joinpoints=1)
-    fc = TrendForecaster.forecast(years, mean_rates, horizon=5)
-
-    # PAF Example (Smoking exposure prevalence = 22%, RR = 12.0)
-    paf_smoking = PAFCalculator.levin_paf(0.22, 12.0)
-
-    rep = ComprehensiveAPCReport(
+    return ComprehensiveAPCReport(
         table_summary={
-            "title": ds["title"],
+            "title": path.name,
             "num_ages": len(table.age_groups),
             "num_periods": len(table.periods),
             "num_cohorts": len(table.cohorts),
@@ -111,189 +78,162 @@ def run_demo(as_json: bool = False) -> int:
         },
         estimable_functions=estimable,
         model_comparisons=models,
-        best_fitting_model="Age-Period-Cohort (APC)",
-        joinpoint=jp,
-        forecasts=fc,
-        paf_estimates={"smoking_attributable_fraction": paf_smoking},
+        best_fitting_model=min(models, key=lambda m: m.aic).model_type,
     )
 
+
+def run_demo(as_json: bool = False) -> int:
+    report = APCStatisticalEngine.analyze_table(REFERENCE_DATASETS["synthetic_lung_cancer_male"])
     if as_json:
-        print(rep.to_json())
+        print(report.to_json())
     else:
-        print(format_apc_report(rep))
-    return 0
-
-
-def run_interactive() -> int:
-    """Interactive studio for APC modeling."""
-    print("=" * 70)
-    print(" Age-Period-Cohort (APC) Epidemiological Studio")
-    print("=" * 70)
-    print("1. Run Standard SEER US Male Lung Cancer APC Demo")
-    print("2. Calculate Population Attributable Fraction (PAF)")
-    print("3. Run Joinpoint Trend Regression")
-    print("4. Extrapolate Trend Forecast")
-    print("q. Exit")
-    print("-" * 70)
-
-    choice = input("Select option [1-4, q]: ").strip()
-    if choice in ("q", "quit", "exit"):
-        return 0
-
-    if choice == "1":
-        run_demo()
-    elif choice == "2":
-        try:
-            prev = float(input("Exposure Prevalence (e.g. 0.20 for 20%): ").strip() or "0.20")
-            rr = float(input("Relative Risk (RR >= 1.0, e.g. 10.5): ").strip() or "10.5")
-            paf_val = PAFCalculator.levin_paf(prev, rr)
-            print(f"\nPopulation Attributable Fraction (PAF): {paf_val * 100:.2f}% ({paf_val:.4f})")
-        except Exception as e:
-            print(f"Error: {e}")
-    elif choice in ("3", "4"):
-        run_demo()
+        print(format_apc_report(report))
+        print("\nNote: the bundled rate matrix is synthetic and intended for software demonstration only.")
     return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="apc_analyzer",
-        description="Age-Period-Cohort (APC) Epidemiological Statistical Engine",
+        description="Age-period-cohort trend analysis and Poisson model comparison",
     )
-    parser.add_argument("--interactive", "-i", action="store_true", help="Launch interactive studio")
-    parser.add_argument("--demo", action="store_true", help="Run SEER lung cancer benchmark demo")
-    parser.add_argument("--json", action="store_true", help="Output results in JSON format")
+    parser.add_argument("--demo", action="store_true", help="run the bundled synthetic example")
+    parser.add_argument("--json", action="store_true", help="emit JSON where supported")
+    sub = parser.add_subparsers(dest="command")
 
-    sub = parser.add_subparsers(dest="command", help="Subcommands")
+    analyze = sub.add_parser("analyze", help="analyze a complete long-format age-period CSV")
+    analyze.add_argument("--input", "-i", required=True, help="CSV with age_group, period, events, person_years")
+    analyze.add_argument("--json", action="store_true")
 
-    # Joinpoint
-    jp_p = sub.add_parser("joinpoint", help="Perform joinpoint piecewise regression")
-    jp_p.add_argument("--years", nargs="+", type=int, required=True, help="Year sequence")
-    jp_p.add_argument("--rates", nargs="+", type=float, required=True, help="Rate sequence")
-    jp_p.add_argument("--max-joinpoints", type=int, default=2, help="Max joinpoints")
-    jp_p.add_argument("--json", action="store_true", help="Output results in JSON format")
+    paf = sub.add_parser("paf", help="calculate Levin population-attributable fraction")
+    paf.add_argument("--prevalence", "-p", type=float, required=True)
+    paf.add_argument("--rr", "-r", type=float, required=True)
+    paf.add_argument("--json", action="store_true")
 
-    # PAF
-    paf_p = sub.add_parser("paf", help="Calculate Population Attributable Fraction")
-    paf_p.add_argument("--prevalence", "-p", type=float, required=True, help="Exposure prevalence (0 to 1)")
-    paf_p.add_argument("--rr", "-r", type=float, required=True, help="Relative Risk (>= 1.0)")
-    paf_p.add_argument("--json", action="store_true", help="Output results in JSON format")
+    jp = sub.add_parser("joinpoint", help="fit 0-2 segmented log-linear trends selected by BIC")
+    jp.add_argument("--years", nargs="+", type=int, required=True)
+    jp.add_argument("--rates", nargs="+", type=float, required=True)
+    jp.add_argument("--max-joinpoints", type=int, choices=(0, 1, 2), default=2)
+    jp.add_argument("--min-segment-length", type=int, default=4)
+    jp.add_argument("--json", action="store_true")
 
-    # Forecast
-    fc_p = sub.add_parser("forecast", help="Extrapolate rates forward")
-    fc_p.add_argument("--years", nargs="+", type=int, required=True, help="Historical years")
-    fc_p.add_argument("--rates", nargs="+", type=float, required=True, help="Historical rates")
-    fc_p.add_argument("--horizon", type=int, default=5, help="Years to forecast")
-    fc_p.add_argument("--json", action="store_true", help="Output results in JSON format")
+    fc = sub.add_parser("forecast", help="fit and extrapolate a log-linear rate trend")
+    fc.add_argument("--years", nargs="+", type=int, required=True)
+    fc.add_argument("--rates", nargs="+", type=float, required=True)
+    fc.add_argument("--horizon", type=int, default=5)
+    fc.add_argument("--json", action="store_true")
 
-    # Batch CSV
-    b_p = sub.add_parser("batch", help="Process Age-Period rates CSV")
-    b_p.add_argument("--input", "-in", required=True, help="Input CSV path")
-    b_p.add_argument("--output", "-out", required=True, help="Output CSV path")
-
+    batch = sub.add_parser("batch", help="compute rates per 100,000 from event/exposure CSV rows")
+    batch.add_argument("--input", "-i", required=True)
+    batch.add_argument("--output", "-o", required=True)
     return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    try:
+        if args.demo:
+            return run_demo(as_json=args.json)
 
-    if args.interactive or (not args.command and not args.demo):
-        if not args.demo and (argv is None or len(argv) == 0):
-            return run_interactive()
+        if args.command == "analyze":
+            report = _analyze_csv(Path(args.input).expanduser().resolve())
+            print(report.to_json() if args.json else format_apc_report(report))
+            return 0
 
-    if args.demo:
-        return run_demo(as_json=args.json)
+        if args.command == "paf":
+            value = PAFCalculator.levin_paf(args.prevalence, args.rr)
+            payload = {
+                "prevalence": args.prevalence,
+                "relative_risk": args.rr,
+                "paf": value,
+                "paf_pct": round(value * 100.0, 4),
+            }
+            print(json.dumps(payload) if args.json else f"PAF: {payload['paf_pct']:.4f}% ({value:.6f})")
+            return 0
 
-    if args.command == "paf":
-        val = PAFCalculator.levin_paf(args.prevalence, args.rr)
-        if args.json:
-            print(json.dumps({"prevalence": args.prevalence, "relative_risk": args.rr, "paf": val, "paf_pct": round(val * 100, 2)}))
-        else:
-            print(f"Population Attributable Fraction (PAF): {val * 100:.2f}% (PAF = {val:.4f})")
-        return 0
+        if args.command == "joinpoint":
+            result = JoinpointAnalyzer.fit(
+                args.years,
+                args.rates,
+                max_joinpoints=args.max_joinpoints,
+                min_segment_length=args.min_segment_length,
+            )
+            if args.json:
+                print(json.dumps(asdict(result), indent=2))
+            else:
+                print(f"AAPC: {result.average_annual_percent_change:+.3f}%/year")
+                print(f"Selected joinpoints: {result.joinpoints or 'none'}")
+                for seg in result.segments:
+                    print(
+                        f"{seg.start_year}-{seg.end_year}: {seg.apc_pct:+.3f}%/year "
+                        f"(95% CI {seg.apc_ci[0]:+.3f} to {seg.apc_ci[1]:+.3f})"
+                    )
+            return 0
 
-    if args.command == "joinpoint":
-        if len(args.years) != len(args.rates):
-            print("Error: Years and rates must have matching length", file=sys.stderr)
-            return 1
-        res = JoinpointAnalyzer.fit(args.years, args.rates, max_joinpoints=args.max_joinpoints)
-        if args.json:
-            print(json.dumps(asdict(res), indent=2))
-        else:
-            print("=" * 60)
-            print(f" JOINPOINT REGRESSION RESULT (AAPC = {res.average_annual_percent_change:+.2f}%/yr)")
-            print("=" * 60)
-            print(f"  - Inflection Joinpoints: {res.joinpoints}")
-            print(f"  - SSE:                   {res.sse:.4f}")
-            for s in res.segments:
-                print(f"  * {s.start_year}-{s.end_year}: APC = {s.apc_pct:+.2f}% [95% CI: {s.apc_ci[0]:+.2f}%, {s.apc_ci[1]:+.2f}%]")
-            print("=" * 60)
-        return 0
+        if args.command == "forecast":
+            result = TrendForecaster.forecast(args.years, args.rates, args.horizon)
+            if args.json:
+                print(json.dumps([asdict(x) for x in result], indent=2))
+            else:
+                for item in result:
+                    print(
+                        f"{item.year}: {item.predicted_rate:.4f} "
+                        f"(95% prediction interval {item.ci_lower:.4f} to {item.ci_upper:.4f})"
+                    )
+            return 0
 
-    if args.command == "forecast":
-        fc = TrendForecaster.forecast(args.years, args.rates, horizon=args.horizon)
-        if args.json:
-            print(json.dumps([asdict(f) for f in fc], indent=2))
-        else:
-            print("=" * 60)
-            print(f" RATE FORECAST (Horizon = {args.horizon} years)")
-            print("=" * 60)
-            for f in fc:
-                print(f"  * Year {f.year}: {f.predicted_rate:.2f} [95% CI: {f.ci_lower:.2f} - {f.ci_upper:.2f}]")
-            print("=" * 60)
-        return 0
-
-    if args.command == "batch":
-        try:
-            # Security: Validate paths to prevent path traversal
-            input_path = Path(args.input).resolve()
-            output_path = Path(args.output).resolve()
-
-            # Ensure input file exists and is a regular file
+        if args.command == "batch":
+            input_path = Path(args.input).expanduser().resolve()
+            output_path = Path(args.output).expanduser().resolve()
             if not input_path.is_file():
-                print(f"Error: Input file not found: {args.input}", file=sys.stderr)
-                return 1
-
-            # Security: Reject paths that try to access sensitive locations
-            # Only allow alphanumeric, hyphen, underscore, dot in filenames
-            if any(part.startswith('.') and part not in ('.', '..') for part in input_path.parts):
-                print("Error: Hidden directory traversal not allowed", file=sys.stderr)
-                return 1
-
-            with open(input_path, "r", newline="", encoding="utf-8-sig") as f_in:
-                reader = csv.DictReader(f_in)
+                raise ValueError(f"input file not found: {input_path}")
+            if input_path == output_path:
+                raise ValueError("input and output paths must be different")
+            with input_path.open("r", newline="", encoding="utf-8-sig") as handle:
+                reader = csv.DictReader(handle)
+                required = {"age_group", "period", "events", "person_years"}
+                if not reader.fieldnames or not required.issubset(reader.fieldnames):
+                    raise ValueError("CSV must contain age_group, period, events, and person_years columns")
                 rows = list(reader)
 
-            if not rows:
-                print("Warning: Input CSV has no data rows", file=sys.stderr)
-
             out_rows = []
-            for r in rows:
-                ev = float(r.get("events", r.get("cases", 0.0)))
-                py = float(r.get("person_years", r.get("population", 100000.0)))
-                rate = (ev / py) * 100000.0 if py > 0 else 0.0
-                out_rows.append({
-                    "age_group": r.get("age_group", "All"),
-                    "period": r.get("period", "All"),
-                    "events": ev,
-                    "person_years": py,
-                    "rate_per_100k": round(rate, 2),
-                })
-            with open(output_path, "w", newline="", encoding="utf-8") as f_out:
-                if out_rows:
-                    writer = csv.DictWriter(f_out, fieldnames=list(out_rows[0].keys()))
-                    writer.writeheader()
-                    writer.writerows(out_rows)
-            print(f"Processed {len(out_rows)} rows to {args.output}")
+            for i, row in enumerate(rows, 2):
+                try:
+                    events = float(row["events"])
+                    exposure = float(row["person_years"])
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"row {i}: events and person_years must be numeric") from exc
+                if not math.isfinite(events) or events < 0:
+                    raise ValueError(f"row {i}: events must be finite and non-negative")
+                if not math.isfinite(exposure) or exposure <= 0:
+                    raise ValueError(f"row {i}: person_years must be finite and positive")
+                out_rows.append(
+                    {
+                        "age_group": row["age_group"],
+                        "period": row["period"],
+                        "events": events,
+                        "person_years": exposure,
+                        "rate_per_100k": round(events / exposure * 100000.0, 6),
+                    }
+                )
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with output_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=["age_group", "period", "events", "person_years", "rate_per_100k"],
+                )
+                writer.writeheader()
+                writer.writerows(out_rows)
+            print(f"Processed {len(out_rows)} row(s) -> {output_path}")
             return 0
-        except Exception as e:
-            print(f"Batch error: {e}", file=sys.stderr)
-            return 1
 
-    parser.print_help()
-    return 1
+        parser.print_help()
+        return 0
+    except (ValueError, RuntimeError, OSError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
