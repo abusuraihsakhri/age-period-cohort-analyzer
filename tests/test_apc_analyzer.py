@@ -1,334 +1,194 @@
-#!/usr/bin/env python3
-"""
-Unit Test Suite for Age-Period-Cohort (APC) Analyzer
-====================================================
-Comprehensive test suite verifying OLS regression, Holford estimable functions,
-Net Drift, local drifts, curvatures, cohort RRs, model hierarchy, joinpoint regression,
-PAF formulas, rate forecasting, and CLI interfaces.
-"""
-
 import csv
 import json
 import math
-import os
-import sys
-import tempfile
-import unittest
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parent
-if ROOT_DIR.name == "tests":
-    ROOT_DIR = ROOT_DIR.parent
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
+import pytest
 
+import cli
 from apc_analyzer import (
-    ordinary_least_squares,
     APCCell,
-    APCTable,
     APCStatisticalEngine,
     JoinpointAnalyzer,
     PAFCalculator,
-    TrendForecaster,
     REFERENCE_DATASETS,
+    TrendForecaster,
     build_apc_table_from_matrix,
+    build_apc_table_from_records,
+    ordinary_least_squares,
 )
-import cli
 
 
-class TestOLSLinearRegression(unittest.TestCase):
-    """Test ordinary least squares mathematical functions."""
-
-    def test_ols_exact_line(self):
-        # y = 2x + 5
-        xs = [1.0, 2.0, 3.0, 4.0, 5.0]
-        ys = [7.0, 9.0, 11.0, 13.0, 15.0]
-        fit = ordinary_least_squares(xs, ys)
-        self.assertAlmostEqual(fit.slope, 2.0, places=5)
-        self.assertAlmostEqual(fit.intercept, 5.0, places=5)
-        self.assertAlmostEqual(fit.r_squared, 1.0, places=5)
-        self.assertAlmostEqual(fit.mse, 0.0, places=5)
-
-    def test_ols_minimum_points_validation(self):
-        with self.assertRaises(ValueError):
-            ordinary_least_squares([1.0], [5.0])
-
-    def test_ols_constant_slope_zero(self):
-        xs = [1.0, 2.0, 3.0, 4.0]
-        ys = [10.0, 10.0, 10.0, 10.0]
-        fit = ordinary_least_squares(xs, ys)
-        self.assertAlmostEqual(fit.slope, 0.0, places=5)
-        self.assertAlmostEqual(fit.intercept, 10.0, places=5)
+def test_ols_exact_line():
+    fit = ordinary_least_squares([1, 2, 3, 4], [3, 5, 7, 9])
+    assert fit.slope == pytest.approx(2.0)
+    assert fit.intercept == pytest.approx(1.0)
+    assert fit.r_squared == pytest.approx(1.0)
 
 
-class TestAPCTableConstruction(unittest.TestCase):
-    """Test 2D Age-Period table mapping and cohort diagonal assignment."""
-
-    def test_cohort_diagonal_mapping(self):
-        age_groups = ["50-54", "55-59", "60-64"] # 3 ages
-        periods = ["1990", "1995", "2000", "2005"] # 4 periods
-        # Expected cohorts = 3 + 4 - 1 = 6
-        rates = [[10.0, 12.0, 14.0, 16.0], [20.0, 24.0, 28.0, 32.0], [40.0, 48.0, 56.0, 64.0]]
-        tbl = build_apc_table_from_matrix(age_groups, periods, rates)
-        self.assertEqual(len(tbl.cohorts), 6)
-        self.assertEqual(len(tbl.cells), 12)
-
-        # Cell (age=0, period=0) -> cohort = 0 - 0 + 2 = 2
-        c00 = [c for c in tbl.cells if c.age_idx == 0 and c.period_idx == 0][0]
-        self.assertEqual(c00.cohort_idx, 2)
+def test_ols_rejects_mismatched_or_degenerate_x():
+    with pytest.raises(ValueError):
+        ordinary_least_squares([1, 2], [1])
+    with pytest.raises(ValueError):
+        ordinary_least_squares([1, 1], [2, 3])
 
 
-class TestAPCEstimableFunctions(unittest.TestCase):
-    """Test Holford identifiable estimable functions (Net Drift, Curvatures, Cohort RRs)."""
-
-    def setUp(self):
-        ds = REFERENCE_DATASETS["us_lung_cancer_male"]
-        self.table = build_apc_table_from_matrix(
-            ds["age_groups"], ds["periods"], ds["rates_per_100k"], ds["std_py"]
-        )
-
-    def test_net_drift_calculation(self):
-        res = APCStatisticalEngine.fit_estimable_functions(self.table)
-        self.assertIsInstance(res.net_drift_pct, float)
-        self.assertLess(res.net_drift_ci[0], res.net_drift_ci[1])
-
-    def test_local_drifts_present_for_all_age_groups(self):
-        res = APCStatisticalEngine.fit_estimable_functions(self.table)
-        for age in self.table.age_groups:
-            self.assertIn(age, res.local_drifts)
-
-    def test_curvatures_second_differences(self):
-        res = APCStatisticalEngine.fit_estimable_functions(self.table)
-        self.assertGreater(len(res.age_curvatures), 0)
-        self.assertGreater(len(res.period_curvatures), 0)
-        self.assertGreater(len(res.cohort_curvatures), 0)
-
-    def test_cohort_relative_risks_positive(self):
-        res = APCStatisticalEngine.fit_estimable_functions(self.table)
-        for c, rr in res.cohort_relative_risks.items():
-            self.assertGreater(rr, 0.0)
+def test_cell_validation():
+    with pytest.raises(ValueError):
+        APCCell(0, 0, 0, "a", "p", "c", -1, 100)
+    with pytest.raises(ValueError):
+        APCCell(0, 0, 0, "a", "p", "c", 1, 0)
 
 
-class TestModelHierarchy(unittest.TestCase):
-    """Test model comparison and deviance calculations."""
-
-    def test_nested_models_evaluation(self):
-        ds = REFERENCE_DATASETS["us_lung_cancer_male"]
-        tbl = build_apc_table_from_matrix(ds["age_groups"], ds["periods"], ds["rates_per_100k"], ds["std_py"])
-        models = APCStatisticalEngine.evaluate_model_hierarchy(tbl)
-        self.assertEqual(len(models), 4)
-
-        names = [m.model_type for m in models]
-        self.assertIn("Age-Only (A)", names)
-        self.assertIn("Age-Period (AP)", names)
-        self.assertIn("Age-Cohort (AC)", names)
-        self.assertIn("Age-Period-Cohort (APC)", names)
-
-        # Full APC should have lower deviance than Age-Only
-        dev_a = next(m.deviance for m in models if "Age-Only" in m.model_type)
-        dev_apc = next(m.deviance for m in models if "Age-Period-Cohort" in m.model_type)
-        self.assertLess(dev_apc, dev_a)
+def test_matrix_builder_shape_validation():
+    with pytest.raises(ValueError):
+        build_apc_table_from_matrix(["a", "b"], ["p1", "p2"], [[1, 2]])
+    with pytest.raises(ValueError):
+        build_apc_table_from_matrix(["a"], ["p1", "p2"], [[1]])
+    with pytest.raises(ValueError):
+        build_apc_table_from_matrix(["a"], ["p1"], [[-1]])
 
 
-class TestJoinpointRegression(unittest.TestCase):
-    """Test piecewise joinpoint regression."""
-
-    def test_single_slope_zero_joinpoints(self):
-        years = [2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007]
-        rates = [100.0, 95.0, 90.0, 85.0, 80.0, 75.0, 70.0, 65.0]
-        res = JoinpointAnalyzer.fit(years, rates, max_joinpoints=0)
-        self.assertEqual(len(res.joinpoints), 0)
-        self.assertEqual(len(res.segments), 1)
-        self.assertLess(res.segments[0].apc_pct, 0.0)
-
-    def test_one_joinpoint_inflection_detection(self):
-        # Flat then sharp decline
-        years = [1990, 1992, 1994, 1996, 1998, 2000, 2002, 2004, 2006, 2008]
-        rates = [50.0, 50.2, 49.8, 50.1, 49.9, 45.0, 38.0, 30.0, 22.0, 15.0]
-        res = JoinpointAnalyzer.fit(years, rates, max_joinpoints=1, min_segment_length=4)
-        self.assertGreaterEqual(len(res.segments), 1)
-        self.assertIsInstance(res.average_annual_percent_change, float)
-
-    def test_joinpoint_series_too_short_raises_error(self):
-        with self.assertRaises(ValueError):
-            JoinpointAnalyzer.fit([2000, 2001], [50.0, 40.0], min_segment_length=4)
+def test_record_builder_requires_complete_rectangle():
+    rows = [
+        {"age_group": "40-44", "period": "2000", "events": "2", "person_years": "1000"},
+        {"age_group": "45-49", "period": "2000", "events": "3", "person_years": "1000"},
+        {"age_group": "40-44", "period": "2005", "events": "4", "person_years": "1000"},
+    ]
+    with pytest.raises(ValueError):
+        build_apc_table_from_records(rows)
 
 
-class TestPAFCalculator(unittest.TestCase):
-    """Test Population Attributable Fraction formulas."""
-
-    def test_levin_paf_formula_values(self):
-        # Pe = 0.20, RR = 5.0 -> num = 0.20*(4) = 0.8, denom = 1.8 -> PAF = 0.8 / 1.8 = 0.4444
-        paf = PAFCalculator.levin_paf(0.20, 5.0)
-        self.assertAlmostEqual(paf, 0.4444, places=4)
-
-    def test_levin_paf_zero_exposure(self):
-        paf = PAFCalculator.levin_paf(0.0, 10.0)
-        self.assertEqual(paf, 0.0)
-
-    def test_levin_paf_universal_exposure(self):
-        # Pe = 1.0 -> PAF = (RR - 1)/RR
-        paf = PAFCalculator.levin_paf(1.0, 4.0)
-        self.assertAlmostEqual(paf, 0.75, places=4)
-
-    def test_levin_paf_invalid_prevalence_raises_error(self):
-        with self.assertRaises(ValueError):
-            PAFCalculator.levin_paf(1.5, 2.0)
-        with self.assertRaises(ValueError):
-            PAFCalculator.levin_paf(-0.1, 2.0)
-
-    def test_levin_paf_invalid_rr_raises_error(self):
-        with self.assertRaises(ValueError):
-            PAFCalculator.levin_paf(0.3, 0.5)
-
-    def test_miettinen_paf(self):
-        # P_{e|d} = 0.60, RR = 3.0 -> PAF = 0.60 * (2.0 / 3.0) = 0.40
-        paf = PAFCalculator.miettinen_paf(0.60, 3.0)
-        self.assertAlmostEqual(paf, 0.40, places=4)
+def test_record_builder_maps_cohort_diagonals():
+    rows = []
+    for age in ["40-44", "45-49"]:
+        for period in ["2000", "2005", "2010"]:
+            rows.append({"age_group": age, "period": period, "events": 10, "person_years": 1000})
+    table = build_apc_table_from_records(rows)
+    assert len(table.cells) == 6
+    assert len(table.cohorts) == 4
+    assert table.cells[0].cohort_idx == 1
 
 
-class TestTrendForecasting(unittest.TestCase):
-    """Test rate extrapolation forecasting."""
-
-    def test_trend_forecast_projections(self):
-        years = [2000, 2005, 2010, 2015, 2020]
-        rates = [50.0, 45.0, 40.0, 35.0, 30.0]
-        fc = TrendForecaster.forecast(years, rates, horizon=3)
-        self.assertEqual(len(fc), 3)
-        self.assertEqual(fc[0].year, 2021)
-        self.assertEqual(fc[1].year, 2022)
-        self.assertEqual(fc[2].year, 2023)
-        for f in fc:
-            self.assertLess(f.ci_lower, f.predicted_rate)
-            self.assertLess(f.predicted_rate, f.ci_upper)
+def test_adjusted_period_trend_recovers_known_decline():
+    factor = 0.95 ** 5
+    rates = [
+        [100.0, 100.0 * factor, 100.0 * factor**2, 100.0 * factor**3],
+        [200.0, 200.0 * factor, 200.0 * factor**2, 200.0 * factor**3],
+    ]
+    table = build_apc_table_from_matrix(["40-44", "45-49"], ["2000", "2005", "2010", "2015"], rates, 1_000_000)
+    result = APCStatisticalEngine.fit_estimable_functions(table)
+    assert result.net_drift_pct == pytest.approx(-5.0, abs=0.05)
+    assert result.local_drifts["40-44"] == pytest.approx(-5.0, abs=0.05)
+    assert result.local_drifts["45-49"] == pytest.approx(-5.0, abs=0.05)
 
 
-class TestCLIWorkflows(unittest.TestCase):
-    """Test CLI commands and JSON output."""
-
-    def test_cli_demo(self):
-        self.assertEqual(cli.main(["--demo"]), 0)
-
-    def test_cli_paf_command(self):
-        self.assertEqual(cli.main(["paf", "--prevalence", "0.25", "--rr", "8.0"]), 0)
-
-    def test_cli_joinpoint_command(self):
-        self.assertEqual(cli.main([
-            "joinpoint",
-            "--years", "2000", "2002", "2004", "2006", "2008", "2010", "2012", "2014",
-            "--rates", "80.0", "76.0", "71.0", "65.0", "58.0", "50.0", "43.0", "35.0",
-        ]), 0)
-
-    def test_cli_forecast_command(self):
-        self.assertEqual(cli.main([
-            "forecast",
-            "--years", "2010", "2012", "2014", "2016", "2018",
-            "--rates", "40.0", "38.0", "36.0", "34.0", "32.0",
-            "--horizon", "4",
-        ]), 0)
-
-    def test_batch_csv_processing(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            in_csv = os.path.join(tmpdir, "in.csv")
-            out_csv = os.path.join(tmpdir, "out.csv")
-            with open(in_csv, "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(["age_group", "period", "events", "person_years"])
-                writer.writerow(["50-54", "2000", "120", "100000"])
-                writer.writerow(["55-59", "2000", "240", "100000"])
-
-            ret = cli.main(["batch", "--input", in_csv, "--output", out_csv])
-            self.assertEqual(ret, 0)
-            self.assertTrue(os.path.exists(out_csv))
-            with open(out_csv, "r") as f_out:
-                lines = f_out.readlines()
-                self.assertEqual(len(lines), 3)
-
-    def test_cli_paf_json(self):
-        import io
-        out = io.StringIO()
-        old_stdout = sys.stdout
-        sys.stdout = out
-        try:
-            res = cli.main(["paf", "--prevalence", "0.25", "--rr", "2.4", "--json"])
-            self.assertEqual(res, 0)
-        finally:
-            sys.stdout = old_stdout
-
-        data = json.loads(out.getvalue())
-        self.assertIn("paf", data)
-        self.assertAlmostEqual(data["paf"], 0.2593, places=3)
-
-    def test_cli_sample_csv_batch(self):
-        sample_path = ROOT_DIR / "sample.csv"
-        with tempfile.TemporaryDirectory() as tmpdir:
-            out_csv = os.path.join(tmpdir, "out_sample.csv")
-            ret = cli.main(["batch", "--input", str(sample_path), "--output", out_csv])
-            self.assertEqual(ret, 0)
-            self.assertTrue(os.path.exists(out_csv))
+def test_model_hierarchy_is_likelihood_based_and_nested():
+    ds = REFERENCE_DATASETS["synthetic_lung_cancer_male"]
+    table = build_apc_table_from_matrix(ds["age_groups"], ds["periods"], ds["rates_per_100k"], 100_000)
+    fits = APCStatisticalEngine.evaluate_model_hierarchy(table)
+    assert [x.model_type for x in fits] == [
+        "Age-Only (A)", "Age-Period (AP)", "Age-Cohort (AC)", "Age-Period-Cohort (APC)"
+    ]
+    by_name = {x.model_type: x for x in fits}
+    assert by_name["Age-Period-Cohort (APC)"].deviance <= by_name["Age-Period (AP)"].deviance + 1e-6
+    assert by_name["Age-Period-Cohort (APC)"].deviance <= by_name["Age-Cohort (AC)"].deviance + 1e-6
+    assert by_name["Age-Period-Cohort (APC)"].deviance > 0
+    assert all(math.isfinite(x.log_likelihood) for x in fits)
+    assert all(x.degrees_of_freedom > 0 for x in fits)
 
 
-class TestAnalyzeTable(unittest.TestCase):
-    """Test the analyze_table convenience method."""
-
-    def test_analyze_table_returns_report(self):
-        seer_data = REFERENCE_DATASETS["seer_male_lung_cancer"]
-        report = APCStatisticalEngine.analyze_table(seer_data)
-        self.assertIsNotNone(report.estimable_functions)
-        self.assertIsNotNone(report.model_comparisons)
-        self.assertIsNotNone(report.best_fitting_model)
-        self.assertGreater(len(report.model_comparisons), 0)
-
-    def test_analyze_table_uses_aic_for_best_model(self):
-        seer_data = REFERENCE_DATASETS["seer_male_lung_cancer"]
-        report = APCStatisticalEngine.analyze_table(seer_data)
-        # Best model should be the one with lowest AIC
-        best_by_aic = min(report.model_comparisons, key=lambda m: m.aic)
-        self.assertEqual(report.best_fitting_model, best_by_aic.model_type)
-
-    def test_dataset_key_aliases(self):
-        """Both 'us_lung_cancer_male' and 'seer_male_lung_cancer' should work."""
-        ds1 = REFERENCE_DATASETS["us_lung_cancer_male"]
-        ds2 = REFERENCE_DATASETS["seer_male_lung_cancer"]
-        self.assertEqual(ds1, ds2)
+def test_model_p_values_are_computed_not_hardcoded():
+    ds = REFERENCE_DATASETS["synthetic_lung_cancer_male"]
+    fits = APCStatisticalEngine.analyze_table(ds).model_comparisons
+    assert all(0.0 <= x.p_value <= 1.0 for x in fits)
+    assert len({x.p_value for x in fits}) > 1
 
 
-class TestTwoJoinpoints(unittest.TestCase):
-    """Test 2-joinpoint search in JoinpointAnalyzer."""
-
-    def test_two_joinpoints_supported(self):
-        # Create data with two clear inflection points
-        years = [1990, 1992, 1994, 1996, 1998, 2000, 2002, 2004, 2006, 2008, 2010, 2012, 2014, 2016, 2018]
-        rates = [50.0, 50.5, 49.8, 50.2, 49.7, 45.0, 38.0, 30.0, 22.0, 15.0, 14.5, 15.2, 14.8, 15.1, 14.9]
-        res = JoinpointAnalyzer.fit(years, rates, max_joinpoints=2, min_segment_length=4)
-        # Should find at least 1 joinpoint with this clear pattern
-        self.assertGreaterEqual(len(res.segments), 1)
-        self.assertIsInstance(res.average_annual_percent_change, float)
+def test_analyze_table_chooses_lowest_aic():
+    report = APCStatisticalEngine.analyze_table(REFERENCE_DATASETS["synthetic_lung_cancer_male"])
+    assert report.best_fitting_model == min(report.model_comparisons, key=lambda x: x.aic).model_type
 
 
-class TestBatchSecurity(unittest.TestCase):
-    """Test batch command security features."""
-
-    def test_batch_missing_input_file(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            missing = os.path.join(tmpdir, "nonexistent.csv")
-            out_csv = os.path.join(tmpdir, "out.csv")
-            ret = cli.main(["batch", "--input", missing, "--output", out_csv])
-            self.assertEqual(ret, 1)
-
-    def test_batch_empty_csv(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            in_csv = os.path.join(tmpdir, "empty.csv")
-            out_csv = os.path.join(tmpdir, "out.csv")
-            with open(in_csv, "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(["age_group", "period", "events", "person_years"])
-                # No data rows
-            ret = cli.main(["batch", "--input", in_csv, "--output", out_csv])
-            self.assertEqual(ret, 0)
-            self.assertTrue(os.path.exists(out_csv))
+def test_reference_dataset_is_explicitly_synthetic():
+    ds = REFERENCE_DATASETS["synthetic_lung_cancer_male"]
+    assert ds["synthetic"] is True
+    assert "synthetic" in ds["title"].lower()
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_paf_values_and_validation():
+    assert PAFCalculator.levin_paf(0.2, 5.0) == pytest.approx(0.444444, abs=1e-6)
+    assert PAFCalculator.miettinen_paf(0.6, 3.0) == pytest.approx(0.4)
+    with pytest.raises(ValueError):
+        PAFCalculator.levin_paf(-0.1, 2)
+    with pytest.raises(ValueError):
+        PAFCalculator.levin_paf(0.2, 0.8)
 
+
+def test_joinpoint_validates_inputs():
+    with pytest.raises(ValueError):
+        JoinpointAnalyzer.fit([2000, 2001], [10], min_segment_length=2)
+    with pytest.raises(ValueError):
+        JoinpointAnalyzer.fit([2000, 2000, 2001, 2002], [10, 9, 8, 7], min_segment_length=2)
+    with pytest.raises(ValueError):
+        JoinpointAnalyzer.fit([2000, 2001, 2002, 2003], [10, 0, 8, 7], min_segment_length=2)
+
+
+def test_joinpoint_linear_series_prefers_no_joinpoint():
+    years = list(range(2000, 2012))
+    rates = [100 * (0.97 ** i) for i in range(len(years))]
+    result = JoinpointAnalyzer.fit(years, rates, max_joinpoints=2, min_segment_length=3)
+    assert result.joinpoints == []
+    assert result.average_annual_percent_change == pytest.approx(-3.0, abs=0.05)
+
+
+def test_joinpoint_detects_strong_change_when_supported_by_bic():
+    years = list(range(2000, 2014))
+    rates = [100.0] * 7 + [100 * (0.80 ** (i + 1)) for i in range(7)]
+    result = JoinpointAnalyzer.fit(years, rates, max_joinpoints=1, min_segment_length=4)
+    assert len(result.joinpoints) == 1
+    assert len(result.segments) == 2
+
+
+def test_forecast_validation_and_output():
+    with pytest.raises(ValueError):
+        TrendForecaster.forecast([2000, 2001], [10, 9])
+    with pytest.raises(ValueError):
+        TrendForecaster.forecast([2000, 2001, 2002], [10, 0, 8])
+    result = TrendForecaster.forecast([2000, 2005, 2010, 2015], [100, 90, 81, 72.9], 2)
+    assert [x.year for x in result] == [2016, 2017]
+    assert all(x.ci_lower <= x.predicted_rate <= x.ci_upper for x in result)
+
+
+def test_cli_paf_json(capsys):
+    assert cli.main(["paf", "--prevalence", "0.25", "--rr", "2.4", "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["paf"] == pytest.approx(0.259259, abs=1e-6)
+
+
+def test_cli_analyze_complete_csv(tmp_path, capsys):
+    p = tmp_path / "apc.csv"
+    with p.open("w", newline="") as handle:
+        w = csv.writer(handle)
+        w.writerow(["age_group", "period", "events", "person_years"])
+        for age, multiplier in [("40-44", 1), ("45-49", 2), ("50-54", 3)]:
+            for i, period in enumerate(["2000", "2005", "2010", "2015"]):
+                w.writerow([age, period, 20 * multiplier * (0.9 ** i), 100000])
+    assert cli.main(["analyze", "--input", str(p), "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["table_summary"]["num_ages"] == 3
+    assert len(payload["model_comparisons"]) == 4
+
+
+def test_cli_batch_rejects_invalid_exposure(tmp_path, capsys):
+    p = tmp_path / "in.csv"
+    p.write_text("age_group,period,events,person_years\n40-44,2000,10,0\n", encoding="utf-8")
+    out = tmp_path / "out.csv"
+    assert cli.main(["batch", "--input", str(p), "--output", str(out)]) == 2
+    assert "person_years" in capsys.readouterr().err
+
+
+def test_cli_demo_marks_synthetic(capsys):
+    assert cli.main(["--demo"]) == 0
+    out = capsys.readouterr().out.lower()
+    assert "synthetic" in out
