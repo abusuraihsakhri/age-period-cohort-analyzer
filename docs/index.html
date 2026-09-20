@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta name="description" content="Age-period-cohort trend analysis from event and person-year tables.">
+  <title>Age-Period-Cohort Analyzer</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">EPIDEMIOLOGY TOOL</div>
+      <h1>Age-Period-Cohort Analyzer</h1>
+    </div>
+    <div class="top-actions">
+      <span class="status-dot" aria-hidden="true"></span><span class="status-text">Local processing</span>
+      <button id="themeToggle" class="icon-button" type="button" aria-label="Toggle dark mode" title="Toggle theme">◐</button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <nav class="tabs" aria-label="Tool sections">
+      <button class="tab active" data-tab="analysis" type="button">APC analysis</button>
+      <button class="tab" data-tab="paf" type="button">PAF</button>
+      <button class="tab" data-tab="trend" type="button">Trend</button>
+      <a class="repo-link" href="https://github.com/abusuraihsakhri/age-period-cohort-analyzer" target="_blank" rel="noopener noreferrer">Repository ↗</a>
+    </nav>
+
+    <section id="analysis" class="view active" aria-labelledby="analysis-tab">
+      <div class="analysis-grid">
+        <section class="panel input-panel">
+          <div class="panel-head">
+            <div>
+              <h2>Age-period table</h2>
+              <p>Long CSV: age_group, period, events, person_years</p>
+            </div>
+            <button id="loadSample" class="secondary small" type="button">Load sample</button>
+          </div>
+          <textarea id="csvInput" spellcheck="false" aria-label="Age-period CSV input"></textarea>
+          <div class="input-meta">
+            <span id="dataShape">No dataset loaded</span>
+            <label class="file-button">Open CSV<input id="fileInput" type="file" accept=".csv,text/csv"></label>
+          </div>
+          <button id="analyzeButton" class="primary" type="button">Analyze dataset</button>
+          <p class="fine-print">Counts and person-years remain in your browser. Goodness-of-fit p-values assume event counts are suitable for a Poisson model.</p>
+        </section>
+
+        <section class="panel results-panel" aria-live="polite">
+          <div id="emptyState" class="empty-state">
+            <div class="empty-mark">APC</div>
+            <h2>Ready for analysis</h2>
+            <p>Load the sample or paste a complete rectangular age × period table.</p>
+          </div>
+          <div id="results" class="results hidden">
+            <div class="metric-grid">
+              <article class="metric-card"><span>Adjusted period trend</span><strong id="netDrift">—</strong><small id="netDriftCi">—</small></article>
+              <article class="metric-card"><span>Lowest AIC</span><strong id="lowestAic">—</strong><small>Model comparison only</small></article>
+              <article class="metric-card"><span>Table</span><strong id="tableSize">—</strong><small id="cohortCount">—</small></article>
+            </div>
+            <div class="result-block">
+              <div class="block-head"><h3>Poisson model comparison</h3><span class="hint">Lower AIC/BIC indicates better relative fit</span></div>
+              <div class="table-wrap"><table><thead><tr><th>Model</th><th>Deviance</th><th>df</th><th>AIC</th><th>BIC</th><th>GOF p</th></tr></thead><tbody id="modelRows"></tbody></table></div>
+            </div>
+            <div class="result-block compact-block"><div class="block-head"><h3>Age-specific period trends</h3><span class="hint">Poisson log-linear %/year</span></div><div id="localDrifts" class="chip-grid"></div></div>
+          </div>
+          <div id="errorBox" class="error-box hidden" role="alert"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="paf" class="view">
+      <div class="utility-card">
+        <div class="utility-copy"><div class="eyebrow">LEVIN FORMULA</div><h2>Population Attributable Fraction</h2><p>Enter exposure prevalence and a relative risk ≥ 1. Results are descriptive and depend on the causal assumptions behind the PAF.</p></div>
+        <div class="utility-form">
+          <label>Exposure prevalence <input id="pafPrev" type="number" min="0" max="1" step="0.01" value="0.20"></label>
+          <label>Relative risk <input id="pafRr" type="number" min="1" step="0.1" value="5.0"></label>
+          <button id="pafButton" class="primary" type="button">Calculate PAF</button>
+          <div class="big-result"><span>PAF</span><strong id="pafResult">44.44%</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="trend" class="view">
+      <div class="utility-card trend-card">
+        <div class="utility-copy"><div class="eyebrow">TIME TREND</div><h2>Segmented trend & forecast</h2><p>Enter comma-separated years and positive rates. Up to two joinpoints are evaluated and selected by BIC.</p></div>
+        <div class="utility-form wide-form">
+          <label>Years <input id="trendYears" type="text" value="2000,2002,2004,2006,2008,2010,2012,2014"></label>
+          <label>Rates <input id="trendRates" type="text" value="80,76,71,65,58,50,43,35"></label>
+          <div class="inline-fields">
+            <label>Max joinpoints <select id="maxJoinpoints"><option>0</option><option>1</option><option selected>2</option></select></label>
+            <label>Forecast years <input id="forecastHorizon" type="number" min="1" max="20" value="5"></label>
+          </div>
+          <button id="trendButton" class="primary" type="button">Run trend analysis</button>
+        </div>
+        <div id="trendResult" class="trend-result"><div><span>AAPC</span><strong>—</strong></div><div><span>Joinpoints</span><strong>—</strong></div><div><span>Forecast</span><strong>—</strong></div></div>
+      </div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
