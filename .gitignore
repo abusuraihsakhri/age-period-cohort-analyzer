@@ -1,8 +1,5 @@
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
 .pytest_cache/
 .coverage
 htmlcov/
@@ -13,6 +10,7 @@ build/
 venv/
 ENV/
 results.csv
+rates.csv
 output.csv
 output.json
 *.log
